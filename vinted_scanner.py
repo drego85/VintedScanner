@@ -114,15 +114,20 @@ def main():
     
     # Call the API to obtain list of items
 
+    # catalog_ids
     # 1499: Bambini > Giochi
     # 1193: Bambini
 
     # order: relevance, newest_first, price_high_to_low, price_low_to_high
+
+    # brand_ids
+    # 1036110: Faba
     params = {
         'page': '1',
         'per_page': '96',
-        'search_text': 'faba',
-        'catalog_ids': '1499',
+        'search_text': '',
+        'catalog_ids': '',
+        'brand_ids' : '1036110',
         'order': 'newest_first',
     }
 

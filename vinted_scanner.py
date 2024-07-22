@@ -114,11 +114,13 @@ def main():
     
     # Call the API to obtain list of items
 
+    # 1499: Bambini > Giochi
+    # 1193: Bambini
     params = {
         'page': '1',
         'per_page': '96',
         'search_text': 'faba',
-        'catalog_ids': '1499',
+        'catalog_ids': '1193',
         'order': 'newest_first',
     }
 

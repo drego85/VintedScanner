@@ -122,8 +122,8 @@ def main():
         'page': '1',
         'per_page': '96',
         'search_text': 'faba',
-        'catalog_ids': '1193',
-        'order': 'relevance',
+        'catalog_ids': '1499',
+        'order': 'newest_first',
     }
 
     response = requests.get("https://www.vinted.it/api/v2/catalog/items", params=params, cookies=cookies, headers=headers)

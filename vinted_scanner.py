@@ -116,12 +116,14 @@ def main():
 
     # 1499: Bambini > Giochi
     # 1193: Bambini
+
+    # order: relevance, newest_first, price_high_to_low, price_low_to_high
     params = {
         'page': '1',
         'per_page': '96',
         'search_text': 'faba',
         'catalog_ids': '1193',
-        'order': 'newest_first',
+        'order': 'relevance',
     }
 
     response = requests.get("https://www.vinted.it/api/v2/catalog/items", params=params, cookies=cookies, headers=headers)

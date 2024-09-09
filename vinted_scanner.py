@@ -171,8 +171,7 @@ def main():
 
     if data:
         for item in data["items"]:
-
-            print(item)
+            
             item_id = str(item["id"])
             item_title = item["title"]
             item_url = item["url"]

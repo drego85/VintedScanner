@@ -26,8 +26,8 @@ With this script, you no longer need to manually open the Vinted app and search 
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-username/vinted-auto-scanner.git
-   cd vinted-auto-scanner
+   git clone https://github.com/drego85/VintedScanner.git
+   cd VintedScanner
    ```
 
 2. Install the required dependencies:
@@ -35,9 +35,9 @@ With this script, you no longer need to manually open the Vinted app and search 
    pip3 install -r requirements.txt
    ```
 
-3. Rename the configuration file `Config.sample.py` to `Config.py`:
+3. Copy the configuration file `Config.sample.py` to `Config.py`:
    ```bash
-   mv Config.sample.py Config.py
+   cp Config.sample.py Config.py
    ```
 
 ### Configuration

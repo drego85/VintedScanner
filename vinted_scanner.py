@@ -73,7 +73,7 @@ def send_email(item_title, item_price, item_url, item_image):
         msg["Message-ID"] = email.utils.make_msgid()
 
         # Format message content
-        body = f"{item_title}\n{item_price} EUR\n🔗 {item_url}\n📷 {item_image}"
+        body = f"{item_title}\n{item_price}\n🔗 {item_url}\n📷 {item_image}"
 
         msg.set_content(body)
         
@@ -101,7 +101,7 @@ def send_slack_message(item_title, item_price, item_url, item_image):
     webhook_url = Config.slack_webhook_url 
 
     # Format message content
-    message = f"*{item_title}*\n🏷️ {item_price} EUR\n🔗 {item_url}\n📷 {item_image}"
+    message = f"*{item_title}*\n🏷️ {item_price}\n🔗 {item_url}\n📷 {item_image}"
     slack_data = {"text": message}
 
     try:
@@ -124,7 +124,7 @@ def send_slack_message(item_title, item_price, item_url, item_image):
 def send_telegram_message(item_title, item_price, item_url, item_image):
 
     # Format message content
-    message = f"<b>{item_title}*</b>\n🏷️ {item_price} EUR\n🔗 {item_url}\n📷 {item_image}"
+    message = f"<b>{item_title}*</b>\n🏷️ {item_price}\n🔗 {item_url}\n📷 {item_image}"
 
     try:
         url = f"https://api.telegram.org/bot{Config.telegram_bot_token}/sendMessage"
@@ -169,7 +169,7 @@ def main():
                 item_id = str(item["id"])
                 item_title = item["title"]
                 item_url = item["url"]
-                item_price = item["price"]
+                item_price = f'{item["price"]["amount"]} {item["price"]["currency_code"]}'
                 item_image = item["photo"]["full_size_url"]
 
                 # Check if the item has already been analyzed to prevent duplicates

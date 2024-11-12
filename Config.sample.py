@@ -3,7 +3,6 @@ smtp_username = ""
 smtp_psw = ""
 smtp_server = ""
 smtp_toaddrs = ["User <example@example.com>"]
-smtp_from = "example@example.com"
 
 # Slack WebHook for notification
 slack_webhook_url = ""

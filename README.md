@@ -126,10 +126,19 @@ This will run the script every hour and log the output to `logfile.log`.
 
 Logs are stored in the `vinted_scanner.log` file. The script uses a rotating log handler to ensure that logs don't grow too large.
 
-### Contributing
+c### Contributing and Supporting the Project
 
-Feel free to open issues and submit pull requests if you have ideas for new features or improvements.
+There are two ways you can contribute to the development of **Tosint**:
+
+1. **Development Contributions**:
+
+   Please ensure that your code follows best practices and includes relevant tests.
+
+2. **Donation Support**:
+   If you find this project useful and would like to support its development, you can also make a donation via [Buy Me a Coffee](https://buymeacoffee.com/andreadraghetti). Your support is greatly appreciated and helps to keep this project going!
+
+   [![Buy Me a Coffee](https://img.shields.io/badge/-Buy%20Me%20a%20Coffee-orange?logo=buy-me-a-coffee&logoColor=white&style=flat-square)](https://buymeacoffee.com/andreadraghetti)
 
 ### License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the GNU General Public License v3.0.

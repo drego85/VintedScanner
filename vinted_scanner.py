@@ -184,7 +184,7 @@ def main():
                         send_slack_message(item_title, item_price, item_url, item_image)
 
                     # Send Telegram notifications if configured
-                    if Config.telegram_bot_token and telegram_channel_id:
+                    if Config.telegram_bot_token and Config.telegram_chat_id:
                         send_telegram_message(item_title, item_price, item_url, item_image)
 
                     # Mark item as analyzed and save it

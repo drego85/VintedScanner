@@ -184,71 +184,183 @@ def send_telegram_message(item_title, item_price, item_url, item_image):
 
 
 def get_catalog_items(session, params):
+    """
+    Retrieve catalog items from the Vinted API for multiple query variants.
+
+    Fetches items from the Vinted catalog API by expanding query variants and making
+    requests for each one. Handles various error conditions gracefully, including
+    network errors, invalid JSON responses, and malformed data structures.
+
+    Args:
+        session (requests.Session): An authenticated session object for making HTTP requests.
+        params (dict): Query parameters to be expanded into multiple variants for searching.
+
+    Returns:
+        list: A list of unique catalog items (as dictionaries) collected from all query
+            variants. Returns an empty list if no valid items are found or all requests fail.
+            Each item is guaranteed to have a valid 'id' field and is deduplicated by item ID.
+
+    Raises:
+        None. All exceptions are caught and logged; the function returns a list (possibly empty)
+        rather than raising exceptions.
+
+    Note:
+        - Items are deduplicated by ID across all query variants.
+        - Malformed items or items without an ID are skipped silently.
+        - Detailed logging is performed for all error conditions encountered.
+    """
     """Return the catalog items, or an empty list if Vinted returns an error."""
-    catalog_url = f"{Config.vinted_url}/api/v2/catalog/items"
+    collected_items = []
+    seen_ids = set()
 
-    try:
-        response = session.get(
-            catalog_url,
-            params=params,
-            headers=headers,
-            timeout=timeoutconnection,
-        )
+    for query_variant in expand_query_variants(params):
+        api_base = getattr(Config, "vinted_api_url", "https://api.vinted.de").rstrip("/")
+        catalog_url = f"{api_base}/svc-catalogue/items"
 
-        logging.info("HTTP Status: %s", response.status_code)
-        logging.info("Response Text: %.500s", response.text)
+        request_params = build_catalog_params(query_variant)
 
-        response.raise_for_status()
-    except requests.exceptions.RequestException as e:
-        logging.error("Vinted catalog request failed: %s", e)
+        try:
+            response = session.get(
+                catalog_url,
+                params=request_params,
+                headers=headers,
+                timeout=timeoutconnection,
+            )
+
+            logging.info("HTTP Status: %s", response.status_code)
+            logging.info("Response Text: %.500s", response.text)
+
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            logging.error("Vinted catalog request failed: %s", e)
+            continue
+
+        try:
+            data = response.json()
+        except requests.exceptions.JSONDecodeError:
+            logging.error(
+                "Vinted returned a non-JSON response (HTTP %s): %.200s",
+                response.status_code,
+                response.text,
+            )
+            continue
+
+        if not isinstance(data, dict):
+            logging.error(
+                "Unexpected Vinted response type: expected an object, got %s",
+                type(data).__name__,
+            )
+            continue
+
+        if "items" not in data:
+            logging.error(f"Unexpected response: {data}")
+            continue
+
+        items = data.get("items")
+        if not isinstance(items, list):
+            error_message = data.get("message") or data.get("error") or "unknown error"
+            logging.error(
+                "Vinted response does not contain a valid 'items' list "
+                "(HTTP %s, message: %s, keys: %s)",
+                response.status_code,
+                error_message,
+                ", ".join(sorted(data.keys())),
+            )
+            continue
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            item_id = item.get("id")
+            if item_id is None:
+                continue
+            item_id = str(item_id)
+            if item_id in seen_ids:
+                continue
+            seen_ids.add(item_id)
+            collected_items.append(item)
+
+    return collected_items
+
+
+def split_csv_values(value):
+    if value is None:
         return []
-
-    
-
-    try:
-        data = response.json()
-    except requests.exceptions.JSONDecodeError:
-        logging.error(
-            "Vinted returned a non-JSON response (HTTP %s): %.200s",
-            response.status_code,
-            response.text,
-        )
-        return []
-
-    if not isinstance(data, dict):
-        logging.error(
-            "Unexpected Vinted response type: expected an object, got %s",
-            type(data).__name__,
-        )
-        return []
-
-    if "items" not in data:
-        logging.error(f"Unexpected response: {data}")
-        return[]
-    
-    items = data.get("items")
-
-    if not isinstance(items, list):
-        error_message = data.get("message") or data.get("error") or "unknown error"
-        logging.error(
-            "Vinted response does not contain a valid 'items' list "
-            "(HTTP %s, message: %s, keys: %s)",
-            response.status_code,
-            error_message,
-            ", ".join(sorted(data.keys())),
-        )
-        return []
-
-    return items
+    if isinstance(value, (list, tuple, set)):
+        values = []
+        for item in value:
+            values.extend(split_csv_values(item))
+        return values
+    return [segment.strip() for segment in str(value).split(",") if segment and segment.strip()]
 
 
-def print_dry_run_item(item_title, item_price, item_url, item_image):
-    print(f"Title: {item_title}")
-    print(f"Price: {item_price}")
-    print(f"URL: {item_url}")
-    if item_image:
-        print(f"Image: {item_image}")
-    print()
+def expand_query_variants(query):
+    """Vinted rejects multiple brand IDs in a single catalog request; split them into individual searches."""
+    variants = [dict(query)]
+
+    for key in ("brand_ids", "attribute_ids[brand]"):
+        value = query.get(key)
+        values = split_csv_values(value)
+        if len(values) <= 1:
+            continue
+
+        expanded = []
+        for single_value in values:
+            variant = dict(query)
+            variant[key] = single_value
+            expanded.append(variant)
+        return expanded
+
+    return variants
+
+
+def build_catalog_params(query):
+    """Map the legacy query schema to Vinted's current attribute_ids format."""
+    request_params = {}
+
+    # Keep the base search fields that are still used in the current API.
+    for key in (
+        "page",
+        "per_page",
+        "search_text",
+        "currency",
+        "order",
+        "price_from",
+        "price_to",
+        "global_search_session_id",
+    ):
+        value = query.get(key)
+        if value not in (None, ""):
+            request_params[key] = value
+
+    if "currency" not in request_params:
+        request_params["currency"] = "EUR"
+
+    attribute_map = {
+        "catalog": "catalog_ids",
+        "size": "size_ids",
+        "brand": "brand_ids",
+        "status": "status_ids",
+        "color": "color_ids",
+        "material": "material_ids",
+    }
+
+    for attribute_name, legacy_key in attribute_map.items():
+        value = query.get(legacy_key)
+        if value in (None, ""):
+            continue
+
+        values = split_csv_values(value)
+        if not values:
+            continue
+
+        request_params[f"attribute_ids[{attribute_name}]"] = values[0] if len(values) == 1 else values[0]
+
+    for key, value in query.items():
+        if key.startswith("attribute_ids[") and value not in (None, ""):
+            request_params[key] = value if not isinstance(value, (list, tuple, set)) else list(value)[0]
+
+    return request_params
 
 
 def main(dry_run=False):
@@ -257,16 +369,19 @@ def main(dry_run=False):
 
     # Initialize session and obtain session cookies from Vinted
     session = requests.Session()
+    vinted_url = getattr(Config, "vinted_url", "https://www.vinted.de")
     try:
         response = session.get(
-            Config.vinted_url,
+            vinted_url,
             headers=headers,
             timeout=timeoutconnection,
         )
         response.raise_for_status()
     except requests.exceptions.RequestException as e:
-        logging.error("Unable to initialize the Vinted session: %s", e)
-        return
+        logging.warning(
+            "Unable to initialize the Vinted session; continuing with direct API calls: %s",
+            e,
+        )
 
     # Loop through each search query defined in Config.py
     for params in Config.queries:
@@ -279,6 +394,8 @@ def main(dry_run=False):
             item_id = item.get("id")
             item_title = item.get("title")
             item_url = item.get("url")
+            if item_url and not item_url.startswith("http"):
+                item_url = f"{getattr(Config, 'vinted_url', 'https://www.vinted.de').rstrip('/')}/{item_url.lstrip('/')}"
             if item_id is None or not item_title or not item_url:
                 logging.warning(
                     "Skipping an incomplete catalog item (id: %r)",

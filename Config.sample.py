@@ -23,6 +23,7 @@ vinted_locale = "it-IT"
 # returned by Vinted's fuzzy search.
 # Each filter value must be a list of Vinted IDs. Leave the list empty to
 # disable that filter. Multiple IDs are supported in the same filter.
+# Add an optional "exclude_title_terms" list to each query that needs it.
 
 # Use vinted_query_builder.py to generate entries for this list.
 queries = []

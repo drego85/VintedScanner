@@ -29,6 +29,28 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(params["attribute_ids[brand]"], "417,53")
         self.assertNotIn("attribute_ids[size]", params)
 
+    def test_query_exclusions_are_local_and_not_sent_to_vinted(self):
+        params = scanner.build_catalog_params(
+            {
+                "page": "1",
+                "per_page": "96",
+                "search_text": "Switch",
+                "order": "newest_first",
+                "exclude_title_terms": ["DS"],
+                "filters": {},
+            }
+        )
+
+        self.assertEqual(params["search_text"], "Switch")
+        self.assertNotIn("exclude_title_terms", params)
+
+    def test_title_exclusions_are_whole_word_and_have_no_global_fallback(self):
+        with patch.object(scanner.Config, "exclude_title_terms", ["DS"], create=True):
+            self.assertFalse(scanner.title_contains_excluded_term("Nintendo DS"))
+
+        self.assertTrue(scanner.title_contains_excluded_term("Nintendo ds", ["DS"]))
+        self.assertFalse(scanner.title_contains_excluded_term("DSi console", ["DS"]))
+
     def test_build_catalog_params_rejects_legacy_keys(self):
         with self.assertRaisesRegex(ValueError, "legacy query keys"):
             scanner.build_catalog_params(
@@ -72,6 +94,7 @@ class NotificationTests(unittest.TestCase):
     @patch("vinted_scanner.requests.post")
     def test_telegram_escapes_html_and_sets_timeout(self, post):
         post.return_value.raise_for_status.return_value = None
+        post.return_value.json.return_value = {"ok": True}
 
         result = scanner.send_telegram_message(
             "A < B & C",
@@ -84,9 +107,9 @@ class NotificationTests(unittest.TestCase):
         self.assertTrue(result)
         call = post.call_args
         self.assertEqual(call.kwargs["timeout"], scanner.REQUEST_TIMEOUT_SECONDS)
-        self.assertIn("A &lt; B &amp; C", call.kwargs["params"]["text"])
-        self.assertIn("a=1&amp;b=2", call.kwargs["params"]["text"])
-        self.assertIn("Matched query: gl.&lt;inet&gt;", call.kwargs["params"]["text"])
+        self.assertIn("A &lt; B &amp; C", call.kwargs["data"]["text"])
+        self.assertIn("a=1&amp;b=2", call.kwargs["data"]["text"])
+        self.assertIn("Matched query: gl.&lt;inet&gt;", call.kwargs["data"]["text"])
 
     @patch("vinted_scanner.send_email", return_value=False)
     def test_all_configured_notifications_must_succeed(self, send_email):
@@ -202,6 +225,48 @@ class CatalogueTests(unittest.TestCase):
         self.assertEqual(
             process_item.call_args.kwargs["matched_query"],
             "filters only",
+        )
+
+    @patch("vinted_scanner.save_analyzed_item")
+    @patch("vinted_scanner.send_notifications", return_value=True)
+    @patch("vinted_scanner.get_catalog_items")
+    def test_exclusion_in_one_query_does_not_block_another_query(
+        self,
+        get_catalog_items,
+        send_notifications,
+        save_analyzed_item,
+    ):
+        item = {
+            "id": 123,
+            "title": "Nintendo DS console",
+            "url": "https://example.test/items/123",
+            "price": {"amount": "10", "currency_code": "EUR"},
+        }
+        get_catalog_items.side_effect = [[item], [item]]
+        queries = [
+            {
+                "params": {"search_text": "Switch"},
+                "exclude_title_terms": ["DS"],
+                "query_key": "switch-query",
+            },
+            {
+                "params": {"search_text": "console"},
+                "exclude_title_terms": [],
+                "query_key": "console-query",
+            },
+        ]
+        analyzed_items = set()
+
+        failed = scanner.process_queries(
+            Mock(), "url", queries, {}, analyzed_items, dry_run=False
+        )
+
+        self.assertFalse(failed)
+        self.assertIn("excluded:switch-query:123", analyzed_items)
+        self.assertIn("123", analyzed_items)
+        send_notifications.assert_called_once()
+        save_analyzed_item.assert_any_call(
+            "excluded:switch-query:123", scanner.ITEMS_DATABASE_PATH
         )
 
 

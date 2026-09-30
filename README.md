@@ -82,6 +82,9 @@ To customize the script for your needs, you must configure the `Config.py` file.
      telegram_bot_token = "your_bot_token"
      telegram_chat_id = "your_chat_id"
      ```
+     When a listing has an image, the scanner sends it as a Telegram photo with
+     the title, price, and Vinted link in the caption. If Telegram cannot fetch
+     the image, it sends a text alert with the image URL instead.
 
 4. **Vinted Marketplace**:
    - Set the marketplace URL and locale for the country to search. The scanner
@@ -104,7 +107,7 @@ To customize the script for your needs, you must configure the `Config.py` file.
             "per_page": "24",
              "search_text": "jeans",
             "order": "relevance",
-             "filters": {
+            "filters": {
                  "catalog": [],
                  "brand": ["417"],  # Example brand ID
                  "size": [],
@@ -148,6 +151,10 @@ The scanner initializes an anonymous session on the configured marketplace and
 then searches through `https://api.<marketplace-domain>/svc-catalogue/items`.
 Browser cookies, access tokens, CSRF tokens, and Cloudflare cookies must not be
 copied into the configuration.
+
+Each query can define its own `exclude_title_terms` list to skip listings whose
+titles contain those keywords. Matching is case-insensitive and whole-word;
+exclusions apply independently to each query.
 
 ### Interactive query builder
 

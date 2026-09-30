@@ -2,9 +2,11 @@
 """Search Vinted and notify users about newly listed matching items."""
 import argparse
 import email.utils
+import hashlib
 import html
 import json
 import logging
+import re
 import smtplib
 import sys
 from email.message import EmailMessage
@@ -63,6 +65,9 @@ CATALOG_QUERY_KEYS = {
     "price_to",
     "search_text",
 }
+
+LOCAL_QUERY_KEYS = {"exclude_title_terms"}
+QUERY_EXCLUSION_RECORD_PREFIX = "excluded:"
 
 CATALOG_ORDER_VALUES = {
     "newest_first",
@@ -163,10 +168,15 @@ def build_catalog_params(query):
             "replace them with the filters dictionary described in README.md"
         )
 
-    unknown_keys = set(query).difference(CATALOG_QUERY_KEYS)
+    unknown_keys = set(query).difference(CATALOG_QUERY_KEYS | LOCAL_QUERY_KEYS)
     if unknown_keys:
         unknown_list = ", ".join(sorted(unknown_keys))
         raise ValueError(f"unsupported query keys: {unknown_list}")
+
+    if "exclude_title_terms" in query:
+        normalize_exclude_title_terms(
+            query["exclude_title_terms"], "query exclude_title_terms"
+        )
 
     for required_key in ("page", "per_page", "order", "filters"):
         if required_key not in query:
@@ -182,7 +192,9 @@ def build_catalog_params(query):
     params = {
         key: value
         for key, value in query.items()
-        if key != "filters" and value not in (None, "")
+        if key in CATALOG_QUERY_KEYS
+        and key != "filters"
+        and value not in (None, "")
     }
     for filter_code, filter_ids in filters.items():
         if not isinstance(filter_code, str) or not filter_code:
@@ -197,6 +209,15 @@ def build_catalog_params(query):
             params[f"attribute_ids[{filter_code}]"] = ",".join(normalized_ids)
 
     return params
+
+
+def normalize_exclude_title_terms(terms, setting_name):
+    """Validate and normalize a list of local title-exclusion terms."""
+    if not isinstance(terms, (list, tuple)):
+        raise ValueError(f"{setting_name} must be a list of strings")
+    if any(not isinstance(term, str) for term in terms):
+        raise ValueError(f"{setting_name} must contain only strings")
+    return [term.strip() for term in terms if term.strip()]
 
 
 def validate_notification_config(dry_run=False):
@@ -314,7 +335,7 @@ def send_slack_message(item_title, item_price, item_url, item_image, matched_que
 def send_telegram_message(
     item_title, item_price, item_url, item_image, matched_query=None
 ):
-    """Send an HTML-safe Telegram notification and report its result."""
+    """Send an HTML-safe image alert when possible, with a text fallback."""
     message_lines = [
         f"<b>{html.escape(str(item_title))}</b>",
         f"🏷️ {html.escape(str(item_price))}",
@@ -327,6 +348,32 @@ def send_telegram_message(
     if item_image:
         message_lines.append(f"📷 {html.escape(str(item_image))}")
 
+    if item_image:
+        photo_url = f"https://api.telegram.org/bot{Config.telegram_bot_token}/sendPhoto"
+        try:
+            response = requests.post(
+                photo_url,
+                data={
+                    "chat_id": Config.telegram_chat_id,
+                    "photo": item_image,
+                    "caption": "\n".join(message_lines[:-1]),
+                    "parse_mode": "HTML",
+                },
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+            result = response.json()
+            if isinstance(result, dict) and result.get("ok"):
+                logging.info("Telegram photo notification sent")
+                return True
+            logging.warning(
+                "Telegram rejected the listing photo; trying text instead"
+            )
+        except (requests.exceptions.RequestException, ValueError):
+            logging.warning(
+                "Telegram could not send the listing photo; trying text instead"
+            )
+
     url = f"https://api.telegram.org/bot{Config.telegram_bot_token}/sendMessage"
     params = {
         "chat_id": Config.telegram_chat_id,
@@ -337,14 +384,26 @@ def send_telegram_message(
     try:
         response = requests.post(
             url,
-            params=params,
+            data=params,
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
-        logging.info("Telegram notification sent")
-        return True
+        result = response.json()
+        if isinstance(result, dict) and result.get("ok"):
+            logging.info("Telegram notification sent")
+            return True
+        logging.error("Telegram returned an unsuccessful text response")
+        return False
     except requests.exceptions.RequestException as error:
-        logging.error("Error sending Telegram notification: %s", error)
+        status_code = (
+            error.response.status_code
+            if error.response is not None
+            else "unknown"
+        )
+        logging.error("Telegram notification failed (HTTP %s)", status_code)
+        return False
+    except ValueError:
+        logging.error("Telegram returned an invalid text response")
         return False
 
 
@@ -461,16 +520,52 @@ def print_dry_run_item(item, matched_query=None):
     print()
 
 
+def title_contains_excluded_term(title, excluded_terms=None):
+    """Return whether the title contains a whole-word exclusion."""
+    if not isinstance(excluded_terms, (list, tuple)):
+        return False
+    for term in excluded_terms:
+        if not isinstance(term, str) or not term.strip():
+            continue
+        pattern = rf"(?<!\w){re.escape(term.strip())}(?!\w)"
+        if re.search(pattern, str(title), flags=re.IGNORECASE):
+            return True
+    return False
+
+
 def process_item(
     item,
     analyzed_items,
     dry_run,
     database_path=ITEMS_DATABASE_PATH,
     matched_query=None,
+    exclude_title_terms=None,
+    query_key=None,
 ):
     """Process one item and persist it only after the requested action succeeds."""
     normalized_item = normalize_item(item)
-    if not normalized_item or normalized_item["id"] in analyzed_items:
+    if not normalized_item:
+        return True
+
+    item_id = normalized_item["id"]
+    query_exclusion_record = (
+        f"{QUERY_EXCLUSION_RECORD_PREFIX}{query_key}:{item_id}"
+        if query_key
+        else None
+    )
+    if item_id in analyzed_items or (
+        query_exclusion_record and query_exclusion_record in analyzed_items
+    ):
+        return True
+
+    if title_contains_excluded_term(normalized_item["title"], exclude_title_terms):
+        logging.info(
+            "Skipping item with an excluded title term: %s",
+            normalized_item["title"],
+        )
+        record = query_exclusion_record or item_id
+        save_analyzed_item(record, database_path)
+        analyzed_items.add(record)
         return True
 
     if dry_run:
@@ -506,7 +601,17 @@ def initialize_vinted_session(marketplace_url):
 def process_queries(session, catalog_url, queries, api_headers, analyzed_items, dry_run):
     """Process every configured query and report whether any query failed."""
     processing_failed = False
-    for params in queries:
+    for configured_query in queries:
+        if isinstance(configured_query, dict) and "params" in configured_query:
+            params = configured_query["params"]
+            excluded_terms = configured_query.get("exclude_title_terms", [])
+            query_key = configured_query.get("query_key")
+        else:
+            # Keep accepting raw API parameter dictionaries for direct callers.
+            params = configured_query
+            excluded_terms = []
+            query_key = None
+
         matched_query = params.get("search_text") or "filters only"
         try:
             items = get_catalog_items(session, catalog_url, params, api_headers)
@@ -521,6 +626,8 @@ def process_queries(session, catalog_url, queries, api_headers, analyzed_items, 
                 analyzed_items,
                 dry_run,
                 matched_query=matched_query,
+                exclude_title_terms=excluded_terms,
+                query_key=query_key,
             ):
                 processing_failed = True
     return processing_failed
@@ -531,7 +638,33 @@ def load_configuration(dry_run=False):
     catalog_url = build_catalog_url(Config.vinted_url)
     if not isinstance(Config.queries, list) or not Config.queries:
         raise ValueError("queries must contain at least one search")
-    queries = [build_catalog_params(query) for query in Config.queries]
+    queries = []
+    for query in Config.queries:
+        params = build_catalog_params(query)
+        if "exclude_title_terms" in query:
+            excluded_terms = normalize_exclude_title_terms(
+                query["exclude_title_terms"],
+                "query exclude_title_terms",
+            )
+        else:
+            excluded_terms = []
+
+        query_identity = json.dumps(
+            {"params": params, "exclude_title_terms": excluded_terms},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        query_key = hashlib.sha256(
+            query_identity.encode("utf-8")
+        ).hexdigest()[:16]
+        queries.append(
+            {
+                "params": params,
+                "exclude_title_terms": excluded_terms,
+                "query_key": query_key,
+            }
+        )
     validate_notification_config(dry_run)
     return catalog_url, queries, build_api_headers(Config.vinted_url)
 

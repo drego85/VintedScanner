@@ -1,3 +1,5 @@
+import smtplib
+import ssl
 import tempfile
 import unittest
 from pathlib import Path
@@ -105,6 +107,77 @@ class NotificationTests(unittest.TestCase):
 
         self.assertFalse(result)
         send_email.assert_called_once()
+
+
+class EmailNotificationTests(unittest.TestCase):
+    def setUp(self):
+        config_patch = patch.multiple(
+            scanner.Config,
+            smtp_username="user@example.test",
+            smtp_psw="test-password",
+            smtp_server="smtp.example.test",
+            smtp_toaddrs=["Recipient <recipient@example.test>"],
+        )
+        config_patch.start()
+        self.addCleanup(config_patch.stop)
+
+    @patch("vinted_scanner.smtplib.SMTP")
+    def test_email_verifies_tls_before_authentication(self, smtp):
+        server = smtp.return_value.__enter__.return_value
+
+        result = scanner.send_email(
+            "Test item", "10 EUR", "https://www.vinted.it/items/123", None
+        )
+
+        self.assertTrue(result)
+        server.starttls.assert_called_once()
+        context = server.starttls.call_args.kwargs.get("context")
+        self.assertIsInstance(context, ssl.SSLContext)
+        self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(context.check_hostname)
+        self.assertEqual(
+            [method[0] for method in server.method_calls],
+            ["ehlo", "starttls", "ehlo", "login", "send_message"],
+        )
+        server.login.assert_called_once_with("user@example.test", "test-password")
+        server.send_message.assert_called_once()
+
+    @patch("vinted_scanner.smtplib.SMTP")
+    def test_certificate_verification_failures_prevent_authentication(self, smtp):
+        server = smtp.return_value.__enter__.return_value
+        for reason in ("self-signed certificate", "hostname mismatch"):
+            with self.subTest(reason=reason):
+                server.reset_mock()
+                server.starttls.side_effect = ssl.SSLCertVerificationError(reason)
+
+                with self.assertLogs(level="ERROR"):
+                    result = scanner.send_email(
+                        "Test item", "10 EUR", "https://www.vinted.it/items/123", None
+                    )
+
+                self.assertFalse(result)
+                server.login.assert_not_called()
+                server.send_message.assert_not_called()
+
+    @patch("vinted_scanner.smtplib.SMTP")
+    def test_tls_failures_prevent_authentication(self, smtp):
+        server = smtp.return_value.__enter__.return_value
+        for error in (
+            ssl.SSLError("TLS handshake failed"),
+            smtplib.SMTPNotSupportedError("STARTTLS is unavailable"),
+        ):
+            with self.subTest(error=type(error).__name__):
+                server.reset_mock()
+                server.starttls.side_effect = error
+
+                with self.assertLogs(level="ERROR"):
+                    result = scanner.send_email(
+                        "Test item", "10 EUR", "https://www.vinted.it/items/123", None
+                    )
+
+                self.assertFalse(result)
+                server.login.assert_not_called()
+                server.send_message.assert_not_called()
 
 
 class NotificationConfigurationTests(unittest.TestCase):

@@ -6,6 +6,7 @@ import html
 import json
 import logging
 import smtplib
+import ssl
 import sys
 from email.message import EmailMessage
 from logging.handlers import RotatingFileHandler
@@ -277,7 +278,7 @@ def send_email(item_title, item_price, item_url, item_image, matched_query=None)
             timeout=REQUEST_TIMEOUT_SECONDS,
         ) as smtp_server:
             smtp_server.ehlo()
-            smtp_server.starttls()
+            smtp_server.starttls(context=ssl.create_default_context())
             smtp_server.ehlo()
             smtp_server.login(Config.smtp_username, Config.smtp_psw)
             smtp_server.send_message(message)
